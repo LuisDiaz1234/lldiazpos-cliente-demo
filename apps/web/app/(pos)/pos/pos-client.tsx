@@ -34,7 +34,10 @@ export default function POSClient() {
   const [jubilado, setJubilado] = useState(false);
   const [descJubiladoPct, setDescJubiladoPct] = useState<number>(0);
 
-  // Cargar productos vendibles + % jubilado de la empresa
+  // NUEVO: lee de companies si se debe auto-emitir a DGI
+  const [autoEmit, setAutoEmit] = useState<boolean>(false);
+
+  // Cargar productos vendibles + config de empresa (descuento y auto_emit)
   useEffect(() => {
     (async () => {
       try {
@@ -46,7 +49,7 @@ export default function POSClient() {
             .limit(200),
           supabase
             .from('companies')
-            .select('descuento_jubilado')
+            .select('descuento_jubilado, auto_emit_dgi')
             .eq('id', COMPANY_ID)
             .single(),
         ]);
@@ -54,9 +57,10 @@ export default function POSClient() {
         const vendibles = (prods || []).filter((p: any) => p.es_insumo !== true);
         setProductos(vendibles);
         setDescJubiladoPct(Number(cfg?.descuento_jubilado || 0));
+        setAutoEmit(Boolean(cfg?.auto_emit_dgi));
       } catch (e) {
         console.error(e);
-        alert('No pudimos cargar productos. Revisa Supabase.');
+        alert('No pudimos cargar productos/configuración. Revisa Supabase.');
       } finally {
         setLoading(false);
       }
@@ -105,7 +109,7 @@ export default function POSClient() {
 
   const clear = () => setItems([]);
 
-  // Totales (mismos criterios que el backend)
+  // Totales (alineado con backend)
   const { subtotal, itbms, descJub, totalVisual } = useMemo(() => {
     const sub = items.reduce((s, it) => s + it.cantidad * it.precio_unit, 0);
     const itb = items.reduce(
@@ -117,7 +121,7 @@ export default function POSClient() {
     return { subtotal: sub, itbms: itb, descJub: dj, totalVisual: tot };
   }, [items, jubilado, descJubiladoPct]);
 
-  // Cobro
+  // Cobro + auto-emisión DGI si aplica
   async function cobrar() {
     if (items.length === 0) {
       alert('Agrega productos al carrito.');
@@ -144,14 +148,37 @@ export default function POSClient() {
       if (!res.ok) {
         throw new Error(txt);
       }
-      // si el response es JSON { sale_id }
+
+      // Obtener sale_id de la respuesta (JSON o texto)
+      let saleIdStr = '';
       try {
         const { sale_id } = JSON.parse(txt);
-        alert('Venta OK: ' + sale_id);
+        saleIdStr = String(sale_id);
       } catch {
-        // o si llegó como texto crudo desde el endpoint
-        alert('Venta OK: ' + txt);
+        saleIdStr = String(txt);
       }
+      alert('Venta OK: ' + saleIdStr);
+
+      // Auto-emitir DGI si la empresa lo tiene activo
+      if (autoEmit) {
+        try {
+          const emit = await fetch('/api/dgi/emit', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sale_id: saleIdStr }),
+          });
+          const resp = await emit.json();
+          if (emit.ok) {
+            alert(`Factura emitida: Folio ${resp.folio}`);
+          } else {
+            console.warn('DGI error', resp);
+            alert('No se pudo emitir factura DGI (revisa /facturas).');
+          }
+        } catch (e) {
+          console.warn(e);
+        }
+      }
+
       clear();
     } catch (err: any) {
       console.error(err);
@@ -242,6 +269,13 @@ export default function POSClient() {
             <label htmlFor="chkJub" className="text-sm">
               Aplicar descuento Jubilado ({descJubiladoPct}%)
             </label>
+          </div>
+
+          {/* Info de auto-emisión */}
+          <div className="mt-2 text-xs text-gray-500">
+            {autoEmit
+              ? 'Emisión DGI automática activada.'
+              : 'Emisión DGI automática desactivada (puedes activarla en Configuración).'}
           </div>
 
           {/* Totales */}
