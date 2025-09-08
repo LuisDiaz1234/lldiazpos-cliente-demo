@@ -7,6 +7,7 @@ export default function FacturasPage(){
   const supabase = createClient();
   const [rows, setRows] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
 
   async function load(){
     setLoading(true);
@@ -23,18 +24,37 @@ export default function FacturasPage(){
   useEffect(()=>{ load(); },[]);
 
   async function emitir(sale_id: string){
+    setBusy(true);
     const res = await fetch('/api/dgi/emit', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ sale_id })
     });
     const txt = await res.text();
+    setBusy(false);
     if(!res.ok){ alert('Error: '+txt); return; }
+    await load();
+  }
+
+  async function cargarVentasDeHoy(){
+    setBusy(true);
+    const res = await fetch('/api/dgi/init-today', { method:'POST' });
+    setBusy(false);
+    if(!res.ok){ alert(await res.text()); return; }
     await load();
   }
 
   return (
     <div className="space-y-4">
-      <h1 className="text-xl font-semibold">Facturas (DGI)</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-xl font-semibold">Facturas (DGI)</h1>
+        <div className="flex gap-2">
+          <button onClick={cargarVentasDeHoy} disabled={busy}
+            className="px-3 py-2 border rounded-xl">
+            {busy ? 'Procesando…' : 'Cargar ventas de hoy'}
+          </button>
+          <button onClick={load} className="px-3 py-2 border rounded-xl">Refrescar</button>
+        </div>
+      </div>
 
       <div className="overflow-auto border rounded-2xl">
         <table className="min-w-full text-sm">
@@ -63,11 +83,13 @@ export default function FacturasPage(){
                 <td className="p-2">
                   <div className="flex gap-2">
                     {r.status!=='emitida' ? (
-                      <button onClick={()=>emitir(r.sale_id)} className="px-3 py-1 border rounded-xl">Emitir</button>
+                      <button onClick={()=>emitir(r.sale_id)} disabled={busy} className="px-3 py-1 border rounded-xl">
+                        Emitir
+                      </button>
                     ) : (
-                      <>
-                        <a href={`/facturas/${r.invoice_id}`} className="px-3 py-1 border rounded-xl inline-block">Ver/Imprimir</a>
-                      </>
+                      <a href={`/facturas/${r.invoice_id}`} className="px-3 py-1 border rounded-xl inline-block">
+                        Ver/Imprimir
+                      </a>
                     )}
                   </div>
                 </td>
