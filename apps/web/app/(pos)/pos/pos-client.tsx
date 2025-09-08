@@ -4,6 +4,9 @@
 import { useEffect, useState } from 'react';
 import { createClient } from '@/lib/supabaseClient';
 
+const [jubilado, setJubilado] = useState(false);
+const [descJubiladoPct, setDescJubiladoPct] = useState<number>(0);
+
 type Producto = { id: string; nombre: string; precio: number; activo: boolean; es_insumo: boolean };
 type ItemCarrito = {
   product_id: string; nombre: string; cantidad: number; precio_unit: number; itbms_rate: number; descuento: number;
