@@ -1,13 +1,27 @@
+// apps/web/components/print/FacturaA4.tsx
 export default function FacturaA4({ invoice, sale, items, company }: any){
   const fmt = (n:number)=> Number(n||0).toFixed(2);
+
   return (
     <div style={{ fontFamily: 'ui-sans-serif, system-ui', fontSize: 14 }}>
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-        <div>
-          <div style={{ fontSize: 20, fontWeight: 700 }}>{company?.nombre || 'LLdiazProduction'}</div>
-          <div>RUC: {company?.ruc || '-'}</div>
-          <div>{company?.direccion || '-'}</div>
+      {/* Header */}
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:16 }}>
+        <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+          {company?.logo_url ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={company.logo_url} alt="logo" style={{ width:72, height:72, objectFit:'contain' }}/>
+          ) : (
+            <div style={{ width:72, height:72, background:'#f3f4f6', borderRadius:8 }} />
+          )}
+          <div>
+            <div style={{ fontSize: 20, fontWeight: 700 }}>{company?.nombre || 'LLdiazProduction'}</div>
+            <div>RUC: {company?.ruc || '-'}</div>
+            <div>{company?.direccion || '-'}</div>
+            {company?.telefono && <div>Tel: {company.telefono}</div>}
+            {company?.email && <div>{company.email}</div>}
+          </div>
         </div>
+
         <div style={{ textAlign:'right' }}>
           <div style={{ fontSize: 24, fontWeight: 700 }}>FACTURA</div>
           <div><b>Folio:</b> {invoice?.folio || '-'}</div>
@@ -22,6 +36,7 @@ export default function FacturaA4({ invoice, sale, items, company }: any){
 
       <hr style={{ margin: '16px 0' }} />
 
+      {/* Items */}
       <table style={{ width:'100%', borderCollapse:'collapse' }}>
         <thead>
           <tr>
@@ -35,7 +50,10 @@ export default function FacturaA4({ invoice, sale, items, company }: any){
         <tbody>
           {items?.map((it:any)=>(
             <tr key={it.id}>
-              <td style={{ padding:'6px', borderBottom:'1px solid #f1f1f1' }}>{it.product_id}</td>
+              <td style={{ padding:'6px', borderBottom:'1px solid #f1f1f1' }}>
+                <div style={{ fontWeight:600 }}>{it.products?.nombre || it.product_id}</div>
+                {it.products?.sku && <div style={{ fontSize:12, color:'#6b7280' }}>SKU: {it.products.sku}</div>}
+              </td>
               <td style={{ padding:'6px', textAlign:'right', borderBottom:'1px solid #f1f1f1' }}>{fmt(it.cantidad)}</td>
               <td style={{ padding:'6px', textAlign:'right', borderBottom:'1px solid #f1f1f1' }}>${fmt(it.precio_unit)}</td>
               <td style={{ padding:'6px', textAlign:'right', borderBottom:'1px solid #f1f1f1' }}>{fmt(it.itbms_rate*100)}%</td>
@@ -45,8 +63,9 @@ export default function FacturaA4({ invoice, sale, items, company }: any){
         </tbody>
       </table>
 
+      {/* Totales */}
       <div style={{ marginTop: 12, display:'flex', justifyContent:'flex-end' }}>
-        <div style={{ width: 280 }}>
+        <div style={{ width: 320 }}>
           <div style={{ display:'flex', justifyContent:'space-between' }}>
             <div>Subtotal</div><div>${fmt(sale?.subtotal)}</div>
           </div>
