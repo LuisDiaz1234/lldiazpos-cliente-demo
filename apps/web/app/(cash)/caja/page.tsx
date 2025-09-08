@@ -73,7 +73,8 @@ export default function CajaPage(){
             </div>
           </div>
 
-          <div className="mt-3">
+          <div className="mt-3 flex gap-2">
+            <a href={`/caja/arqueo/${session.id}`} className="border rounded-xl px-4 py-2 inline-block">Ver arqueo</a>
             <button onClick={cerrar} className="bg-rose-500 hover:bg-rose-600 text-white rounded-xl px-4 py-2">
               Cerrar caja
             </button>
