@@ -1,0 +1,10 @@
+{
+  "name": "lldiazpos-cliente-demo",
+  "private": true,
+  "workspaces": ["apps/web"],
+  "scripts": {
+    "dev": "npm --workspace web run dev",
+    "build": "npm --workspace web run build",
+    "start": "npm --workspace web run start"
+  }
+}
