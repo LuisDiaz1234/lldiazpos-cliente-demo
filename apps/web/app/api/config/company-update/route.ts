@@ -2,9 +2,23 @@ import { NextRequest, NextResponse } from 'next/server';
 
 export async function POST(req: NextRequest){
   try{
-    const { id, auto_emit_dgi, descuento_jubilado } = await req.json();
-
+    const body = await req.json();
+    const { id } = body || {};
     if(!id) return NextResponse.json({ error: 'Falta id' }, { status: 400 });
+
+    const allowed = [
+      'auto_emit_dgi',
+      'descuento_jubilado',
+      'logo_url',
+      'ruc',
+      'direccion',
+      'telefono',
+      'email',
+      'nombre', // por si quieres editar el nombre también
+    ] as const;
+
+    const patch: Record<string, any> = {};
+    for (const k of allowed) if (k in body) patch[k] = body[k];
 
     const base = process.env.NEXT_PUBLIC_SUPABASE_URL!;
     const svc  = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -16,10 +30,7 @@ export async function POST(req: NextRequest){
         Authorization: `Bearer ${svc}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        ...(auto_emit_dgi === undefined ? {} : { auto_emit_dgi }),
-        ...(descuento_jubilado === undefined ? {} : { descuento_jubilado }),
-      }),
+      body: JSON.stringify(patch),
       cache: 'no-store',
     });
 
