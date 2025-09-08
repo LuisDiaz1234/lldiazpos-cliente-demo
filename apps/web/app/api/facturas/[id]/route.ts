@@ -19,17 +19,17 @@ export async function GET(_req: NextRequest, { params }: Ctx) {
     const invoice = invArr?.[0];
     if (!invoice) return NextResponse.json({ error: 'not_found' }, { status: 404 });
 
-    // sale items
+    // sale items + nombres de productos (FK sale_items.product_id → products.id)
     const itemsRes = await fetch(
-      `${base}/rest/v1/sale_items?sale_id=eq.${invoice.sale_id}`,
+      `${base}/rest/v1/sale_items?sale_id=eq.${invoice.sale_id}&select=id,product_id,cantidad,precio_unit,itbms_rate,descuento,products(nombre,sku)`,
       { headers: { apikey: svc, Authorization: `Bearer ${svc}` }, cache: 'no-store' }
     );
     if (!itemsRes.ok) return new NextResponse(await itemsRes.text(), { status: 400 });
     const items = await itemsRes.json();
 
-    // company
+    // company con nuevos campos
     const compRes = await fetch(
-      `${base}/rest/v1/companies?id=eq.${invoice.company_id}&select=*`,
+      `${base}/rest/v1/companies?id=eq.${invoice.company_id}&select=id,nombre,logo_url,ruc,direccion,telefono,email,descuento_jubilado`,
       { headers: { apikey: svc, Authorization: `Bearer ${svc}` }, cache: 'no-store' }
     );
     if (!compRes.ok) return new NextResponse(await compRes.text(), { status: 400 });
