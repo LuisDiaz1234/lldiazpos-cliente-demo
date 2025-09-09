@@ -7,33 +7,44 @@ const COMPANY_ID = '11111111-1111-1111-1111-111111111111';
 const BRANCH_ID  = '22222222-2222-2222-2222-222222222222';
 
 type Lote = {
-  id: string; product_id: string; productos?: { nombre: string };
+  id: string; product_id: string; products?: { nombre: string };
   lote: string | null; vencimiento: string | null;
   cantidad: number; unit: string | null;
 };
+type Producto = { id: string; nombre: string; activo: boolean };
 
 export default function InventarioPage() {
   const supabase = createClient();
   const [lotes, setLotes] = useState<Lote[]>([]);
+  const [productos, setProductos] = useState<Producto[]>([]);
   const [q, setQ] = useState('');
   const [cant, setCant] = useState(1);
   const [motivo, setMotivo] = useState('ajuste manual');
   const [msg, setMsg] = useState<string>();
 
+  // form de ingreso directo
+  const [newLot, setNewLot] = useState({ product_id:'', cantidad:1, unidad:'unidad', lote:'', vence:'' , motivo:'ingreso directo' });
+
   async function cargar() {
-    // trae lotes con join a producto (si definiste FK products.id => stock_lots.product_id, Supabase permite "products(nombre)")
-    const { data, error } = await supabase
+    const { data: l } = await supabase
       .from('stock_lots')
       .select('id, product_id, lote, vencimiento, cantidad, unit, products(nombre)')
-      .eq('company_id', COMPANY_ID)
-      .eq('branch_id', BRANCH_ID)
+      .eq('company_id', COMPANY_ID).eq('branch_id', BRANCH_ID)
       .order('vencimiento', { ascending: true });
-    if (!error && data) setLotes(data as any);
+    setLotes(l as any || []);
   }
-  useEffect(() => { cargar(); }, []);
+  async function cargarProductos() {
+    const { data: p } = await supabase
+      .from('products')
+      .select('id,nombre,activo')
+      .eq('company_id', COMPANY_ID).eq('activo', true)
+      .order('nombre');
+    setProductos(p || []);
+  }
+  useEffect(() => { cargar(); cargarProductos(); }, []);
 
   const filtered = lotes.filter(l =>
-    (l.productos?.nombre || '').toLowerCase().includes(q.toLowerCase()) ||
+    (l.products?.nombre || '').toLowerCase().includes(q.toLowerCase()) ||
     (l.lote || '').toLowerCase().includes(q.toLowerCase())
   );
 
@@ -48,14 +59,66 @@ export default function InventarioPage() {
     await cargar();
   }
 
+  async function ingresar() {
+    setMsg(undefined);
+    if (!newLot.product_id || !newLot.cantidad) { setMsg('Selecciona producto y cantidad'); return; }
+    const res = await fetch('/api/inventario/ingresar', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        product_id: newLot.product_id,
+        cantidad  : Number(newLot.cantidad),
+        unidad    : newLot.unidad,
+        lote      : newLot.lote || null,
+        vence     : newLot.vence || null,
+        motivo    : newLot.motivo || 'ingreso directo'
+      })
+    });
+    const txt = await res.text();
+    if (!res.ok) { setMsg(txt); return; }
+    setNewLot({ product_id:'', cantidad:1, unidad:'unidad', lote:'', vence:'', motivo:'ingreso directo' });
+    await cargar();
+  }
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       <h1 className="text-xl font-semibold">Inventario (lotes)</h1>
 
+      {/* Ingreso directo */}
+      <div className="rounded-2xl border bg-white p-4 space-y-3">
+        <div className="font-medium">Agregar inventario</div>
+        <div className="grid grid-cols-1 md:grid-cols-6 gap-2">
+          <select className="border rounded-xl px-2 py-2"
+            value={newLot.product_id}
+            onChange={e=>setNewLot(v=>({ ...v, product_id: e.target.value }))}>
+            <option value="">— producto —</option>
+            {productos.map(p=> <option key={p.id} value={p.id}>{p.nombre}</option>)}
+          </select>
+          <input type="number" min={0} className="border rounded-xl px-2 py-2"
+            value={newLot.cantidad} onChange={e=>setNewLot(v=>({ ...v, cantidad: Number(e.target.value||0) }))} />
+          <select className="border rounded-xl px-2 py-2"
+            value={newLot.unidad} onChange={e=>setNewLot(v=>({ ...v, unidad: e.target.value }))}>
+            <option value="unidad">unidad</option><option value="gr">gr</option><option value="kg">kg</option>
+            <option value="ml">ml</option><option value="l">l</option><option value="pieza">pieza</option>
+          </select>
+          <input className="border rounded-xl px-2 py-2" placeholder="Lote"
+            value={newLot.lote} onChange={e=>setNewLot(v=>({ ...v, lote: e.target.value }))} />
+          <input type="date" className="border rounded-xl px-2 py-2"
+            value={newLot.vence} onChange={e=>setNewLot(v=>({ ...v, vence: e.target.value }))} />
+          <button onClick={ingresar} className="px-3 py-2 rounded-xl border bg-white">Guardar</button>
+        </div>
+      </div>
+
+      {/* Ajustes y lista */}
       <div className="flex gap-3 items-center">
-        <input className="border rounded-xl px-3 py-2 w-64" placeholder="Buscar producto o lote…" value={q} onChange={e=>setQ(e.target.value)} />
-        <input type="number" className="border rounded-xl px-3 py-2 w-24 text-right" value={cant} onChange={e=>setCant(Number(e.target.value||0))} />
-        <input className="border rounded-xl px-3 py-2 w-64" placeholder="Motivo" value={motivo} onChange={e=>setMotivo(e.target.value)} />
+        <input className="border rounded-xl px-3 py-2 w-64" placeholder="Buscar…"
+               value={q} onChange={e=>setQ(e.target.value)} />
+        <input type="number" className="border rounded-xl px-3 py-2 w-24 text-right"
+               value={cant} onChange={e=>setCant(Number(e.target.value||0))} />
+        <select className="border rounded-xl px-3 py-2 w-40" value={motivo} onChange={e=>setMotivo(e.target.value)}>
+          <option value="ajuste manual">ajuste manual</option>
+          <option value="merma">merma</option>
+          <option value="rotura">rotura</option>
+        </select>
       </div>
 
       <div className="rounded-2xl border overflow-x-auto bg-white">
@@ -71,12 +134,10 @@ export default function InventarioPage() {
             </tr>
           </thead>
           <tbody>
-            {filtered.length === 0 && (
-              <tr><td className="p-4 text-center text-gray-500" colSpan={6}>Sin lotes</td></tr>
-            )}
+            {filtered.length === 0 && <tr><td className="p-4 text-center text-gray-500" colSpan={6}>Sin lotes</td></tr>}
             {filtered.map(l => (
               <tr key={l.id} className="border-t">
-                <td className="p-2">{l.productos?.nombre || l.product_id}</td>
+                <td className="p-2">{l.products?.nombre || l.product_id}</td>
                 <td className="p-2 text-center">{l.lote || '—'}</td>
                 <td className="p-2 text-center">{l.vencimiento ? new Date(l.vencimiento).toLocaleDateString() : '—'}</td>
                 <td className="p-2 text-right">{l.cantidad.toLocaleString()}</td>
