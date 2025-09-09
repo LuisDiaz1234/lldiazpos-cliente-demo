@@ -22,44 +22,30 @@ export async function POST(req: NextRequest) {
 
     const body = await req.json();
     const company_id: string = body.company_id || COMPANY_ID;
-    const sale_id:   string = body.sale_id || body.venta_id; // acepta ambos nombres
+    const sale_id:   string = body.sale_id || body.venta_id;
 
-    if (!sale_id) {
-      return NextResponse.json({ error: 'sale_id (o venta_id) es requerido' }, { status: 400 });
-    }
+    if (!sale_id) return NextResponse.json({ error: 'sale_id (o venta_id) es requerido' }, { status: 400 });
 
-    // 1) (Opcional) aquí iría la integración real con el Proveedor DGI
-    //    Para la demo generamos un folio y un QR.
+    // Genera folio/QR DEMO (sustituye aquí por tu proveedor real)
     const folio  = makeDemoFolio();
     const qr_url = `https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(folio)}`;
 
-    // 2) Marca la venta como emitida
+    // Marca venta como emitida
     const upd = await fetch(`${base}/rest/v1/sales?id=eq.${sale_id}`, {
-      method: 'PATCH',
-      headers: adminHeaders,
+      method: 'PATCH', headers: adminHeaders,
       body: JSON.stringify({ dgi_status: 'emitida', dgi_folio: folio, dgi_qr: qr_url })
     });
     const updTxt = await upd.text();
     if (!upd.ok) return new NextResponse(updTxt || 'No se pudo actualizar venta', { status: 400 });
 
-    // 3) Upsert en invoices (por si tu UI lista desde ahí)
-    const inv = [{
-      company_id,
-      sale_id,
-      folio,
-      status: 'emitida',
-      qr_url: qr_url
-    }];
+    // Upsert en invoices (por si tu /facturas lista desde aquí)
     const ins = await fetch(`${base}/rest/v1/invoices`, {
-      method: 'POST',
-      headers: adminHeaders,
-      body: JSON.stringify(inv)
+      method: 'POST', headers: adminHeaders,
+      body: JSON.stringify([{ company_id, sale_id, folio, status: 'emitida', qr_url }])
     });
     if (!ins.ok) {
-      // puede fallar por unique constraint, entonces hacemos update
       await fetch(`${base}/rest/v1/invoices?sale_id=eq.${sale_id}`, {
-        method: 'PATCH',
-        headers: adminHeaders,
+        method: 'PATCH', headers: adminHeaders,
         body: JSON.stringify({ folio, status: 'emitida', qr_url })
       });
     }
