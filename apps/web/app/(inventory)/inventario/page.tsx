@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { createClient } from '@/lib/supabaseClient';
+import AddProductButton from '@/components/AddProductButton';
 
 const COMPANY_ID = '11111111-1111-1111-1111-111111111111';
 const BRANCH_ID  = '22222222-2222-2222-2222-222222222222';
@@ -21,9 +22,12 @@ export default function InventarioPage() {
   const [cant, setCant] = useState(1);
   const [motivo, setMotivo] = useState('ajuste manual');
   const [msg, setMsg] = useState<string>();
+  const [reloadTick, setReloadTick] = useState(0);
 
   // form de ingreso directo
-  const [newLot, setNewLot] = useState({ product_id:'', cantidad:1, unidad:'unidad', lote:'', vence:'' , motivo:'ingreso directo' });
+  const [newLot, setNewLot] = useState({
+    product_id:'', cantidad:1, unidad:'unidad', lote:'', vence:'', motivo:'ingreso directo'
+  });
 
   async function cargar() {
     const { data: l } = await supabase
@@ -41,12 +45,15 @@ export default function InventarioPage() {
       .order('nombre');
     setProductos(p || []);
   }
-  useEffect(() => { cargar(); cargarProductos(); }, []);
+
+  useEffect(() => { cargar(); cargarProductos(); }, [reloadTick]);
 
   const filtered = lotes.filter(l =>
     (l.products?.nombre || '').toLowerCase().includes(q.toLowerCase()) ||
     (l.lote || '').toLowerCase().includes(q.toLowerCase())
   );
+
+  function reloadAll(){ setReloadTick(x=>x+1); }
 
   async function ajustar(lot_id: string, delta: number) {
     setMsg(undefined);
@@ -81,7 +88,11 @@ export default function InventarioPage() {
 
   return (
     <div className="space-y-5">
-      <h1 className="text-xl font-semibold">Inventario (lotes)</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-xl font-semibold">Inventario (lotes)</h1>
+        {/* Crear producto sin salir del inventario */}
+        <AddProductButton onCreated={reloadAll} />
+      </div>
 
       {/* Ingreso directo */}
       <div className="rounded-2xl border bg-white p-4 space-y-3">
