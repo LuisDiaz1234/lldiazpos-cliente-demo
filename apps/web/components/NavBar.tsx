@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { RoleGate } from '@/components/RoleGate';
+import { useUserRole } from '@/components/useUserRole';
 
 function NavLink({ href, children }: { href: string; children: React.ReactNode }) {
   const pathname = usePathname();
@@ -21,27 +21,43 @@ function NavLink({ href, children }: { href: string; children: React.ReactNode }
 }
 
 export default function NavBar() {
+  const { role, loading } = useUserRole();
+
   return (
     <header className="sticky top-0 z-30 bg-white/80 backdrop-blur border-b">
       <div className="mx-auto max-w-6xl px-4 h-14 flex items-center justify-between">
         <Link href="/" className="font-semibold">LLdiazProduction</Link>
 
-        <nav className="flex items-center gap-1">
-          {/* Visibles para ambos (admin y cajero) */}
-          <NavLink href="/dashboard">Dashboard</NavLink>
-          <NavLink href="/pos">POS</NavLink>
-          <NavLink href="/caja">Caja</NavLink>
-          <NavLink href="/facturas">Facturas</NavLink>
-          <NavLink href="/reportes">Reportes</NavLink>
-
-          {/* Solo ADMIN */}
-          <RoleGate allow={['admin']}>
+        {/* mientras carga el rol, muestra lo básico para evitar parpadeo */}
+        {loading ? (
+          <nav className="flex items-center gap-1">
+            <NavLink href="/dashboard">Dashboard</NavLink>
+            <NavLink href="/pos">POS</NavLink>
+            <NavLink href="/facturas">Facturas</NavLink>
+            <NavLink href="/configuracion">Configuración</NavLink>
+          </nav>
+        ) : role === 'admin' ? (
+          /* ADMIN: todo */
+          <nav className="flex items-center gap-1">
+            <NavLink href="/dashboard">Dashboard</NavLink>
+            <NavLink href="/pos">POS</NavLink>
             <NavLink href="/inventario">Inventario</NavLink>
             <NavLink href="/compras">Compras</NavLink>
+            <NavLink href="/caja">Caja</NavLink>
+            <NavLink href="/facturas">Facturas</NavLink>
+            <NavLink href="/reportes">Reportes</NavLink>
             <NavLink href="/configuracion">Configuración</NavLink>
             <NavLink href="/configuracion/usuarios">Usuarios</NavLink>
-          </RoleGate>
-        </nav>
+          </nav>
+        ) : (
+          /* CAJERO: solo estas 4 secciones */
+          <nav className="flex items-center gap-1">
+            <NavLink href="/dashboard">Dashboard</NavLink>
+            <NavLink href="/pos">POS</NavLink>
+            <NavLink href="/facturas">Facturas</NavLink>
+            <NavLink href="/configuracion">Configuración</NavLink>
+          </nav>
+        )}
 
         <div className="flex items-center gap-2">
           <Link href="/auth/logout" className="px-3 py-2 rounded-xl text-sm hover:bg-gray-50">
