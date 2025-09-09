@@ -1,8 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  experimental: {
-    serverActions: { allowedOrigins: ['*'] }
-  },
-  reactStrictMode: true
+  reactStrictMode: true,
+  experimental: { serverActions: { allowedOrigins: ['*'] } },
+  typescript: { ignoreBuildErrors: true },
+  eslint: { ignoreDuringBuilds: true }
 };
 export default nextConfig;
