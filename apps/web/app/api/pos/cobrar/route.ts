@@ -19,31 +19,25 @@ function makeDemoFolio() {
   return `FOL-${y}-${rand}`;
 }
 
-/** Lee flag desde la vista v_company_flags; si no existe, cae a tablas. */
+/** Lee desde la vista unificada v_company_flags; cae a tablas si no existe */
 async function readAutoFlag(base: string, admin: Record<string,string>, company: string) {
-  // 1) vista unificada
   try {
-    const r = await fetch(`${base}/rest/v1/v_company_flags?select=auto_emit_dgi&company_id=eq.${company}`, { headers: admin });
+    const r = await fetch(`${base}/rest/v1/v_company_flags?select=auto_emit_dgi&company_id=eq.${company}`, { headers: admin, cache:'no-store' });
     if (r.ok) {
       const j = await r.json();
       if (Array.isArray(j) && j[0]) return { source: 'view', value: j[0].auto_emit_dgi === true };
     }
   } catch {}
-
-  // 2) fallback: company_settings
   try {
-    const r = await fetch(`${base}/rest/v1/company_settings?select=auto_emit_dgi&company_id=eq.${company}`, { headers: admin });
+    const r = await fetch(`${base}/rest/v1/company_settings?select=auto_emit_dgi&company_id=eq.${company}`, { headers: admin, cache:'no-store' });
     const j = await r.json();
     if (Array.isArray(j) && j[0]) return { source: 'company_settings', value: j[0].auto_emit_dgi === true };
   } catch {}
-
-  // 3) fallback: companies
   try {
-    const r = await fetch(`${base}/rest/v1/companies?select=auto_emit_dgi&id=eq.${company}`, { headers: admin });
+    const r = await fetch(`${base}/rest/v1/companies?select=auto_emit_dgi&id=eq.${company}`, { headers: admin, cache:'no-store' });
     const j = await r.json();
     if (Array.isArray(j) && j[0]) return { source: 'companies', value: j[0].auto_emit_dgi === true };
   } catch {}
-
   return { source: 'default(false)', value: false };
 }
 
@@ -54,7 +48,6 @@ export async function POST(req: NextRequest) {
     if (!base || !svc) return NextResponse.json({ error: 'Faltan env de Supabase' }, { status: 500 });
     const admin = { apikey: svc, Authorization: `Bearer ${svc}`, 'Content-Type': 'application/json' as const };
 
-    // 1) payload
     const payload = await req.json();
     const company = payload.company_id || COMPANY_ID;
     const branch  = payload.branch_id  || BRANCH_ID;
@@ -66,7 +59,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Items y pagos son requeridos' }, { status: 400 });
     }
 
-    // 2) caja abierta
+    // Caja abierta
     const qs = new URLSearchParams({
       select: 'id', order: 'apertura.desc', limit: '1',
       'company_id': `eq.${company}`, 'branch_id': `eq.${branch}`, 'cierre': 'is.null'
@@ -76,7 +69,7 @@ export async function POST(req: NextRequest) {
     const session_id = Array.isArray(ses) && ses[0]?.id ? ses[0].id : null;
     if (!session_id) return NextResponse.json({ error: 'No hay caja abierta.' }, { status: 400 });
 
-    // 3) procesar venta (RPC)
+    // RPC venta
     const rpcBody = {
       p_company: company,
       p_branch: branch,
@@ -96,46 +89,55 @@ export async function POST(req: NextRequest) {
       sale.data?.new_sale_id || sale.data?.sale_id || sale.data?.id ||
       (typeof sale.data === 'string' ? sale.data : null);
 
-    // 4) lee flag (vista -> fallback)
+    // LEE FLAG
     const flag = await readAutoFlag(base, admin, company);
     const shouldEmit = !!sale_id && flag.value === true;
 
-    // 5) emitir inline si corresponde
+    // COMPuERTA: si está OFF, ni lo intentes (y la BD también lo bloquea)
+    if (!shouldEmit) {
+      return NextResponse.json({
+        ok: true,
+        sale_id,
+        decision: { source: flag.source, value: flag.value },
+        auto_emit_dgi: false,
+        invoice: null
+      });
+    }
+
+    // Emitir inline
     let invoice: any = null;
-    if (shouldEmit && sale_id) {
-      try {
-        const folio  = makeDemoFolio();
-        const qr_url = `https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(folio)}`;
+    try {
+      const folio  = makeDemoFolio();
+      const qr_url = `https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(folio)}`;
 
-        const upd = await fetch(`${base}/rest/v1/sales?id=eq.${sale_id}`, {
+      const upd = await fetch(`${base}/rest/v1/sales?id=eq.${sale_id}`, {
+        method: 'PATCH', headers: admin,
+        body: JSON.stringify({ dgi_status: 'emitida', dgi_folio: folio, dgi_qr: qr_url })
+      });
+      const updTxt = await upd.text();
+      if (!upd.ok) throw new Error(updTxt || 'No se pudo actualizar venta');
+
+      const ins = await fetch(`${base}/rest/v1/invoices`, {
+        method: 'POST', headers: admin,
+        body: JSON.stringify([{ company_id: company, sale_id, folio, status: 'emitida', qr_url }])
+      });
+      if (!ins.ok) {
+        await fetch(`${base}/rest/v1/invoices?sale_id=eq.${sale_id}`, {
           method: 'PATCH', headers: admin,
-          body: JSON.stringify({ dgi_status: 'emitida', dgi_folio: folio, dgi_qr: qr_url })
+          body: JSON.stringify({ folio, status: 'emitida', qr_url })
         });
-        const updTxt = await upd.text();
-        if (!upd.ok) throw new Error(updTxt || 'No se pudo actualizar venta');
-
-        const ins = await fetch(`${base}/rest/v1/invoices`, {
-          method: 'POST', headers: admin,
-          body: JSON.stringify([{ company_id: company, sale_id, folio, status: 'emitida', qr_url }])
-        });
-        if (!ins.ok) {
-          await fetch(`${base}/rest/v1/invoices?sale_id=eq.${sale_id}`, {
-            method: 'PATCH', headers: admin,
-            body: JSON.stringify({ folio, status: 'emitida', qr_url })
-          });
-        }
-
-        invoice = { ok: true, folio, qr_url };
-      } catch (e:any) {
-        invoice = { ok: false, error: e?.message || String(e) };
       }
+
+      invoice = { ok: true, folio, qr_url };
+    } catch (e:any) {
+      invoice = { ok: false, error: e?.message || String(e) };
     }
 
     return NextResponse.json({
       ok: true,
       sale_id,
       decision: { source: flag.source, value: flag.value },
-      auto_emit_dgi: shouldEmit,
+      auto_emit_dgi: true,
       invoice
     });
   } catch (e: any) {
