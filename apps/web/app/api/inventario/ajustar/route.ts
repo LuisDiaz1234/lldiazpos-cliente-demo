@@ -15,28 +15,28 @@ export async function POST(req: NextRequest) {
     const svc  = process.env.SUPABASE_SERVICE_ROLE_KEY!;
     const headers = { apikey: svc, Authorization: `Bearer ${svc}`, 'Content-Type': 'application/json' as const };
 
-    // 1) actualizar cantidad del lote
-    const up = await fetch(`${base}/rest/v1/stock_lots?id=eq.${lot_id}`, {
-      method: 'PATCH', headers, body: JSON.stringify({ cantidad: { increment: Number(delta) } })
-    });
-    if (!up.ok) {
-      // fallback si tu PostgREST no soporta increment
-      const get = await fetch(`${base}/rest/v1/stock_lots?id=eq.${lot_id}&select=cantidad`, { headers });
-      const cur = (await get.json())[0]?.cantidad ?? 0;
-      const set = await fetch(`${base}/rest/v1/stock_lots?id=eq.${lot_id}`, {
-        method: 'PATCH', headers, body: JSON.stringify({ cantidad: Number(cur) + Number(delta) })
-      });
-      if (!set.ok) return new NextResponse(await set.text(), { status: 400 });
-    }
+    // Tomar product_id del lote
+    const lotRes = await fetch(`${base}/rest/v1/stock_lots?id=eq.${lot_id}&select=product_id,cantidad`, { headers });
+    const lot = (await lotRes.json())[0];
+    if (!lot) return NextResponse.json({ error: 'Lote no encontrado' }, { status: 404 });
 
-    // 2) registrar movimiento
+    // Actualizar cantidad del lote
+    const nueva = Number(lot.cantidad || 0) + Number(delta);
+    if (nueva < 0) return NextResponse.json({ error: 'Cantidad resultante negativa' }, { status: 400 });
+
+    const up = await fetch(`${base}/rest/v1/stock_lots?id=eq.${lot_id}`, {
+      method: 'PATCH', headers, body: JSON.stringify({ cantidad: nueva })
+    });
+    if (!up.ok) return new NextResponse(await up.text(), { status: 400 });
+
+    // Registrar movimiento
     const mv = await fetch(`${base}/rest/v1/stock_moves`, {
       method: 'POST', headers,
       body: JSON.stringify([{
-        id: crypto.randomUUID(),
+        id        : crypto.randomUUID(),
         company_id: COMPANY_ID,
         branch_id : BRANCH_ID,
-        product_id: null,        // opcional si tu FK lo permite; si no, podrías resolverlo por select previo
+        product_id: lot.product_id,
         lot_id    : lot_id,
         tipo      : Number(delta) >= 0 ? 'ajuste_entrada' : 'ajuste_salida',
         motivo    : motivo || 'ajuste manual',
