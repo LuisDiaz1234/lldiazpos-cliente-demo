@@ -1,144 +1,116 @@
 'use client';
+
 import { useEffect, useState } from 'react';
 import { createClient } from '@/lib/supabaseClient';
-import AddProductButton from '@/components/AddProductButton';
+import Link from 'next/link';
+
+type GroupRow = { product_id:string; product_name:string; cantidad_total:number; unidad:string; lotes:number };
+type LotRow   = { product_id:string; product_name:string; lote:string|null; vencimiento:string|null; cantidad:number; unidad:string };
 
 const COMPANY_ID = '11111111-1111-1111-1111-111111111111';
 const BRANCH_ID  = '22222222-2222-2222-2222-222222222222';
 
-type Lote = { id:string; product_id:string; products?:{nombre:string}; lote:string|null; vencimiento:string|null; cantidad:number; unit:string|null; };
-type Producto = { id:string; nombre:string; activo:boolean };
+export default function InventarioPage() {
+  const sb = createClient();
+  const [grouped, setGrouped] = useState(true);
+  const [loading, setLoading] = useState(true);
+  const [rows, setRows] = useState<(GroupRow|LotRow)[]>([]);
 
-export default function InventarioPage(){
-  const supabase = createClient();
-  const [lotes,setLotes] = useState<Lote[]>([]);
-  const [insumos,setInsumos] = useState<Producto[]>([]);
-  const [q,setQ] = useState('');
-  const [cant,setCant] = useState(1);
-  const [motivo,setMotivo] = useState('ajuste manual');
-  const [msg,setMsg] = useState<string>();
-  const [tick,setTick] = useState(0);
-
-  const [newLot,setNewLot] = useState({ product_id:'', cantidad:1, unidad:'unidad', lote:'', vence:'' });
-
-  async function cargar(){
-    const { data:l } = await supabase
-      .from('stock_lots')
-      .select('id,product_id,lote,vencimiento,cantidad,unit,products(nombre)')
-      .eq('company_id',COMPANY_ID).eq('branch_id',BRANCH_ID)
-      .order('vencimiento',{ascending:true});
-    setLotes(l as any || []);
+  async function load() {
+    setLoading(true);
+    try {
+      if (grouped) {
+        const { data, error } = await sb
+          .from('v_inventory_grouped_with_name')
+          .select('product_id, product_name, cantidad_total, unidad, lotes')
+          .eq('company_id', COMPANY_ID)
+          .eq('branch_id', BRANCH_ID)
+          .order('product_name', { ascending: true });
+        if (error) throw error;
+        setRows((data||[]) as GroupRow[]);
+      } else {
+        const { data, error } = await sb
+          .from('v_stock_lots_with_name')
+          .select('product_id, product_name, lote, vencimiento, cantidad, unidad')
+          .eq('company_id', COMPANY_ID)
+          .eq('branch_id', BRANCH_ID)
+          .order('vencimiento', { ascending: true, nullsFirst: true })
+          .order('product_name', { ascending: true });
+        if (error) throw error;
+        setRows((data||[]) as LotRow[]);
+      }
+    } catch (e) {
+      console.error(e);
+      setRows([]);
+    } finally {
+      setLoading(false);
+    }
   }
-  async function cargarInsumos(){
-    const { data:p } = await supabase
-      .from('products')
-      .select('id,nombre,activo')
-      .eq('company_id',COMPANY_ID).eq('activo',true).eq('es_insumo',true)
-      .order('nombre');
-    setInsumos(p||[]);
-  }
-  useEffect(()=>{ cargar(); cargarInsumos(); },[tick]);
-  const reload = ()=> setTick(x=>x+1);
 
-  const filtered = lotes.filter(l =>
-      (l.products?.nombre || '').toLowerCase().includes(q.toLowerCase())
-    || (l.lote || '').toLowerCase().includes(q.toLowerCase())
-  );
-
-  async function ajustar(lot_id:string, delta:number){
-    setMsg(undefined);
-    const r = await fetch('/api/inventario/ajuste', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ lot_id, delta, motivo })
-    });
-    const t = await r.text();
-    if(!r.ok){ setMsg(t); return; }
-    cargar();
-  }
-  async function ingresar(){
-    setMsg(undefined);
-    if(!newLot.product_id || !newLot.cantidad){ setMsg('Selecciona producto y cantidad'); return; }
-    const r = await fetch('/api/inventario/ingresar', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({
-        product_id: newLot.product_id, cantidad:Number(newLot.cantidad),
-        unidad:newLot.unidad, lote:newLot.lote || null, vence:newLot.vence || null, motivo:'ingreso directo'
-      })
-    });
-    const t = await r.text();
-    if(!r.ok){ setMsg(t); return; }
-    setNewLot({ product_id:'', cantidad:1, unidad:'unidad', lote:'', vence:'' });
-    cargar();
-  }
+  useEffect(()=>{ load(); }, [grouped]);
 
   return (
-    <div className="space-y-5">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">Inventario (lotes)</h1>
-        {/* Crear INSUMO sin salir del inventario */}
-        <AddProductButton esInsumo={true} onCreated={reload} />
+    <div className="space-y-4">
+      <div className="flex items-center gap-3">
+        <h1 className="text-xl font-semibold">Inventario</h1>
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={grouped} onChange={e=>setGrouped(e.target.checked)}/>
+          Vista agrupada por producto
+        </label>
+        <Link href="/compras" className="ml-auto px-3 py-1 rounded-xl border">+ Registrar compra</Link>
       </div>
 
-      {/* Ingreso directo de lote */}
-      <div className="rounded-2xl border bg-white p-4 space-y-3">
-        <div className="font-medium">Agregar inventario</div>
-        <div className="grid grid-cols-1 md:grid-cols-6 gap-2">
-          <select className="border rounded-xl px-2 py-2"
-            value={newLot.product_id} onChange={e=>setNewLot(v=>({...v, product_id:e.target.value}))}>
-            <option value="">— producto —</option>
-            {insumos.map(p=><option key={p.id} value={p.id}>{p.nombre}</option>)}
-          </select>
-          <input type="number" min={0} className="border rounded-xl px-2 py-2"
-                 value={newLot.cantidad} onChange={e=>setNewLot(v=>({...v, cantidad:Number(e.target.value||0)}))} />
-          <select className="border rounded-xl px-2 py-2" value={newLot.unidad} onChange={e=>setNewLot(v=>({...v, unidad:e.target.value}))}>
-            <option value="unidad">unidad</option><option value="gr">gr</option><option value="kg">kg</option>
-            <option value="ml">ml</option><option value="l">l</option><option value="pieza">pieza</option>
-          </select>
-          <input className="border rounded-xl px-2 py-2" placeholder="Lote" value={newLot.lote} onChange={e=>setNewLot(v=>({...v,lote:e.target.value}))}/>
-          <input type="date" className="border rounded-xl px-2 py-2" value={newLot.vence} onChange={e=>setNewLot(v=>({...v,vence:e.target.value}))}/>
-          <button onClick={ingresar} className="px-3 py-2 rounded-xl border bg-white">Guardar</button>
-        </div>
-      </div>
-
-      {/* Filtros y ajustes */}
-      <div className="flex gap-3 items-center">
-        <input className="border rounded-xl px-3 py-2 w-64" placeholder="Buscar…" value={q} onChange={e=>setQ(e.target.value)}/>
-        <input type="number" className="border rounded-xl px-3 py-2 w-24 text-right" value={cant} onChange={e=>setCant(Number(e.target.value||0))}/>
-        <select className="border rounded-xl px-3 py-2 w-40" value={motivo} onChange={e=>setMotivo(e.target.value)}>
-          <option value="ajuste manual">ajuste manual</option><option value="merma">merma</option><option value="rotura">rotura</option>
-        </select>
-      </div>
-
-      <div className="rounded-2xl border overflow-x-auto bg-white">
-        <table className="min-w-full text-sm">
-          <thead className="bg-gray-50">
-            <tr>
-              <th className="p-2 text-left">Producto</th><th className="p-2">Lote</th><th className="p-2">Vence</th>
-              <th className="p-2 text-right">Cantidad</th><th className="p-2">Unidad</th><th className="p-2">Acciones</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.length===0 && <tr><td colSpan={6} className="p-4 text-center text-gray-500">Sin lotes</td></tr>}
-            {filtered.map(l=>(
-              <tr key={l.id} className="border-t">
-                <td className="p-2">{l.products?.nombre || l.product_id}</td>
-                <td className="p-2 text-center">{l.lote || '—'}</td>
-                <td className="p-2 text-center">{l.vencimiento ? new Date(l.vencimiento).toLocaleDateString() : '—'}</td>
-                <td className="p-2 text-right">{l.cantidad.toLocaleString()}</td>
-                <td className="p-2 text-center">{l.unit || 'unidad'}</td>
-                <td className="p-2 text-center">
-                  <div className="flex gap-2 justify-center">
-                    <button onClick={()=>ajustar(l.id, +Math.abs(cant))} className="px-2 py-1 rounded-lg border">+{cant}</button>
-                    <button onClick={()=>ajustar(l.id, -Math.abs(cant))} className="px-2 py-1 rounded-lg border">-{cant}</button>
-                  </div>
-                </td>
+      {loading ? (
+        <div>Cargando…</div>
+      ) : grouped ? (
+        <div className="rounded-2xl border bg-white p-3 overflow-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left border-b">
+                <th>Producto</th><th>Cantidad</th><th>Unidad</th><th>Lotes</th><th></th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      {msg && <div className="text-sm">{msg}</div>}
+            </thead>
+            <tbody>
+              {(rows as GroupRow[]).map(r=>(
+                <tr key={r.product_id} className="border-b">
+                  <td>{r.product_name}</td>
+                  <td>{Number(r.cantidad_total).toFixed(2)}</td>
+                  <td>{r.unidad}</td>
+                  <td>{r.lotes}</td>
+                  <td><Link className="underline" href={`/inventario/producto/${r.product_id}`}>Ver historial</Link></td>
+                </tr>
+              ))}
+              {(rows as GroupRow[]).length===0 && (
+                <tr><td colSpan={5} className="py-6 text-gray-500 text-center">Sin datos</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="rounded-2xl border bg-white p-3 overflow-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left border-b">
+                <th>Producto</th><th>Lote</th><th>Vence</th><th>Cantidad</th><th>Unidad</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(rows as LotRow[]).map((r,idx)=>(
+                <tr key={idx} className="border-b">
+                  <td>{r.product_name}</td>
+                  <td>{r.lote || '—'}</td>
+                  <td>{r.vencimiento || '—'}</td>
+                  <td>{Number(r.cantidad).toFixed(2)}</td>
+                  <td>{r.unidad}</td>
+                </tr>
+              ))}
+              {(rows as LotRow[]).length===0 && (
+                <tr><td colSpan={5} className="py-6 text-gray-500 text-center">Sin datos</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
