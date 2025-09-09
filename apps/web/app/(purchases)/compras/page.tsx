@@ -3,139 +3,117 @@
 import { useEffect, useState } from 'react';
 import { createClient } from '@/lib/supabaseClient';
 
-const COMPANY_ID = '11111111-1111-1111-1111-111111111111';
+type Supplier = { id:string; nombre:string };
+type Product  = { id:string; nombre:string; es_insumo:boolean; unidad:string };
 
-type Producto = { id: string; nombre: string; es_insumo: boolean; activo: boolean };
+type POItem = {
+  product_id:string;
+  cantidad:number;
+  unidad:string;
+  costo_unit:number;
+  lote?:string;
+  vence?:string; // YYYY-MM-DD
+};
 
 export default function ComprasPage() {
-  const supabase = createClient();
-  const [productos, setProductos] = useState<Producto[]>([]);
-  const [items, setItems] = useState<any[]>([]);
-  const [motivo, setMotivo] = useState('compra');
-  const [msg, setMsg] = useState<string>();
-  const [saving, setSaving] = useState(false);
+  const sb = createClient();
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [products,  setProducts]  = useState<Product[]>([]);
+  const [supplierId, setSupplierId] = useState<string>('');
+  const [items, setItems] = useState<POItem[]>([]);
 
-  useEffect(() => {
-    (async () => {
-      const { data } = await supabase
-        .from('products')
-        .select('id,nombre,es_insumo,activo')
-        .eq('company_id', COMPANY_ID)
-        .eq('activo', true)
-        .order('nombre');
-      setProductos(data || []);
-    })();
-  }, []);
+  useEffect(()=>{ (async()=>{
+    const a = await sb.from('suppliers').select('id,nombre');
+    setSuppliers(a.data||[]);
+    const b = await sb.from('products').select('id,nombre,es_insumo,unidad').eq('es_insumo', true);
+    setProducts(b.data||[]);
+  })(); }, []);
 
-  function addRow() {
-    setItems((arr) => [...arr, { product_id: '', cantidad: 1, unidad: 'unidad', costo: 0, lote: '', vence: '' }]);
+  function addItem() {
+    if (!products.length) return;
+    setItems(i=>[...i, { product_id: products[0].id, cantidad:1, unidad:'unidad', costo_unit:0 }]);
   }
-  function delRow(i: number) { setItems((arr) => arr.filter((_, idx) => idx !== i)); }
-  function setField(i: number, k: string, v: any) {
-    setItems((arr) => arr.map((it, idx) => (idx === i ? { ...it, [k]: v } : it)));
+  function setItem(i:number, patch: Partial<POItem>) {
+    setItems(prev=>{ const a=[...prev]; a[i] = { ...a[i], ...patch }; return a; });
   }
+  function removeItem(i:number) { setItems(prev=>prev.filter((_,idx)=>idx!==i)); }
+
+  const total = items.reduce((a,x)=> a + Number(x.cantidad||0)*Number(x.costo_unit||0), 0);
 
   async function guardar() {
-    setMsg(undefined);
-    setSaving(true);
-    try {
-      const clean = items
-        .map((it) => ({
-          product_id: it.product_id,
-          cantidad  : Number(it.cantidad || 0),
-          unidad    : it.unidad || 'unidad',
-          costo     : Number(it.costo || 0),
-          lote      : it.lote || null,
-          vence     : it.vence || null
-        }))
-        .filter((x) => x.product_id && x.cantidad > 0);
+    if (!supplierId) { alert('Selecciona proveedor'); return; }
+    if (!items.length) { alert('Agrega items'); return; }
 
-      if (clean.length === 0) { setMsg('Agrega al menos 1 ítem'); return; }
-
-      const res = await fetch('/api/compras/ingresar', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items: clean, motivo })
-      });
-      const txt = await res.text();
-      if (!res.ok) { setMsg(txt); return; }
-
-      setMsg('Compra registrada. Lotes ingresados.');
-      setItems([]);
-    } finally { setSaving(false); }
+    const payload = {
+      supplier_id: supplierId,
+      items
+    };
+    const r = await fetch('/api/compras/crear', { method:'POST', body: JSON.stringify(payload) });
+    const t = await r.text(); let j:any={}; try{ j=JSON.parse(t);}catch{}
+    if (!r.ok) { alert('Error: '+t); return; }
+    setItems([]); alert('Compra guardada. Inventory actualizado. ID: '+j.purchase_id);
   }
 
   return (
     <div className="space-y-4">
-      <h1 className="text-xl font-semibold">Compras (ingreso por lotes)</h1>
+      <h1 className="text-xl font-semibold">Compras (Orden de compra → Inventario)</h1>
 
-      <div className="flex gap-3">
-        <button onClick={addRow} className="px-3 py-2 rounded-xl border bg-white">+ Agregar ítem</button>
-        <input className="border rounded-xl px-3 py-2 w-64" placeholder="Motivo" value={motivo} onChange={e=>setMotivo(e.target.value)} />
-        <div className="flex-1" />
-        <button onClick={guardar} disabled={saving} className="px-4 py-2 rounded-xl border bg-white">
-          {saving ? 'Guardando…' : 'Guardar compra'}
+      <div className="rounded-2xl border bg-white p-4 space-y-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="text-sm">Proveedor</label>
+          <select value={supplierId} onChange={e=>setSupplierId(e.target.value)} className="border rounded-xl px-3 py-1">
+            <option value="">— selecciona —</option>
+            {suppliers.map(s=><option key={s.id} value={s.id}>{s.nombre}</option>)}
+          </select>
+
+          <button onClick={addItem} className="px-3 py-1 rounded-xl border">+ Agregar ítem</button>
+        </div>
+
+        <div className="overflow-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left border-b">
+                <th>Insumo</th><th>Cant</th><th>Unidad</th><th>Costo</th><th>Lote</th><th>Vence</th><th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((x,idx)=>(
+                <tr key={idx} className="border-b">
+                  <td>
+                    <select value={x.product_id} onChange={e=>setItem(idx,{product_id:e.target.value})} className="border rounded px-2 py-1">
+                      {products.map(p=><option key={p.id} value={p.id}>{p.nombre}</option>)}
+                    </select>
+                  </td>
+                  <td><input type="number" step="0.01" value={x.cantidad} onChange={e=>setItem(idx,{cantidad:Number(e.target.value)})} className="border rounded px-2 py-1 w-24"/></td>
+                  <td>
+                    <select value={x.unidad} onChange={e=>setItem(idx,{unidad:e.target.value})} className="border rounded px-2 py-1">
+                      <option value="unidad">unidad</option>
+                      <option value="g">g</option>
+                      <option value="kg">kg</option>
+                      <option value="ml">ml</option>
+                      <option value="l">l</option>
+                    </select>
+                  </td>
+                  <td><input type="number" step="0.01" value={x.costo_unit} onChange={e=>setItem(idx,{costo_unit:Number(e.target.value)})} className="border rounded px-2 py-1 w-28"/></td>
+                  <td><input value={x.lote||''} onChange={e=>setItem(idx,{lote:e.target.value})} className="border rounded px-2 py-1 w-28"/></td>
+                  <td><input type="date" value={x.vence||''} onChange={e=>setItem(idx,{vence:e.target.value})} className="border rounded px-2 py-1"/></td>
+                  <td><button onClick={()=>removeItem(idx)} className="px-2 border rounded">x</button></td>
+                </tr>
+              ))}
+              {!items.length && <tr><td colSpan={7} className="py-4 text-gray-500">Sin items</td></tr>}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="flex justify-between font-medium">
+          <span>Total compra</span>
+          <span>${total.toFixed(2)}</span>
+        </div>
+
+        <button onClick={guardar} className="px-4 py-2 rounded-2xl bg-amber-300 hover:bg-amber-200">
+          Guardar compra
         </button>
       </div>
-
-      <div className="rounded-2xl border overflow-x-auto bg-white">
-        <table className="min-w-full text-sm">
-          <thead className="bg-gray-50">
-            <tr>
-              <th className="p-2 text-left">Producto</th>
-              <th className="p-2">Cantidad</th>
-              <th className="p-2">Unidad</th>
-              <th className="p-2">Costo (opcional)</th>
-              <th className="p-2">Lote</th>
-              <th className="p-2">Vence</th>
-              <th className="p-2">Quitar</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.length === 0 && <tr><td className="p-4 text-center text-gray-500" colSpan={7}>Sin ítems</td></tr>}
-            {items.map((it, i) => (
-              <tr key={i} className="border-t">
-                <td className="p-2">
-                  <select className="border rounded-xl px-2 py-1 w-64" value={it.product_id} onChange={e=>setField(i,'product_id', e.target.value)}>
-                    <option value="">— seleccionar —</option>
-                    {productos.map(p => (<option key={p.id} value={p.id}>{p.nombre}</option>))}
-                  </select>
-                </td>
-                <td className="p-2 text-center">
-                  <input type="number" min={0} className="border rounded-xl px-2 py-1 w-24 text-right"
-                         value={it.cantidad} onChange={e=>setField(i,'cantidad', e.target.value)} />
-                </td>
-                <td className="p-2 text-center">
-                  <select className="border rounded-xl px-2 py-1 w-28" value={it.unidad} onChange={e=>setField(i,'unidad', e.target.value)}>
-                    <option value="unidad">unidad</option>
-                    <option value="gr">gr</option>
-                    <option value="kg">kg</option>
-                    <option value="ml">ml</option>
-                    <option value="l">l</option>
-                    <option value="pieza">pieza</option>
-                  </select>
-                </td>
-                <td className="p-2 text-center">
-                  <input type="number" min={0} step="0.01" className="border rounded-xl px-2 py-1 w-28 text-right"
-                         value={it.costo} onChange={e=>setField(i,'costo', e.target.value)} />
-                </td>
-                <td className="p-2 text-center">
-                  <input className="border rounded-xl px-2 py-1 w-28 text-center"
-                         value={it.lote} onChange={e=>setField(i,'lote', e.target.value)} />
-                </td>
-                <td className="p-2 text-center">
-                  <input type="date" className="border rounded-xl px-2 py-1"
-                         value={it.vence} onChange={e=>setField(i,'vence', e.target.value)} />
-                </td>
-                <td className="p-2 text-center">
-                  <button onClick={()=>delRow(i)} className="px-2 py-1 rounded-lg border">Quitar</button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      {msg && <div className="text-sm">{String(msg)}</div>}
     </div>
   );
 }
