@@ -6,38 +6,20 @@ import { NextRequest, NextResponse } from 'next/server';
 const COMPANY_ID = '11111111-1111-1111-1111-111111111111';
 const BRANCH_ID  = '22222222-2222-2222-2222-222222222222';
 
+/** For demo: fuerza auto-emisión después de cobrar */
+const FORCE_AUTO_EMIT = true; // ← pon en false si no quieres auto-emitir
+
 async function toJson(res: Response) {
   const raw = await res.text();
   try { return { ok: res.ok, status: res.status, data: JSON.parse(raw), raw }; }
   catch { return { ok: res.ok, status: res.status, data: null, raw }; }
 }
 
-async function readAutoFlag(base: string, headers: Record<string,string>, company: string): Promise<boolean> {
-  try {
-    const r = await fetch(`${base}/rest/v1/company_settings?select=auto_emit_dgi&company_id=eq.${company}`, { headers });
-    const j = await r.json();
-    if (Array.isArray(j) && j[0]?.auto_emit_dgi === true) return true;
-  } catch {}
-  try {
-    const r = await fetch(`${base}/rest/v1/companies?select=auto_emit_dgi&id=eq.${company}`, { headers });
-    const j = await r.json();
-    if (Array.isArray(j) && j[0]?.auto_emit_dgi === true) return true;
-  } catch {}
-  try {
-    const r = await fetch(`${base}/rest/v1/company_config?select=auto_emit_dgi&company_id=eq.${company}`, { headers });
-    const j = await r.json();
-    if (Array.isArray(j) && j[0]?.auto_emit_dgi === true) return true;
-  } catch {}
-  return false;
-}
-
 export async function POST(req: NextRequest) {
   try {
     const base = process.env.NEXT_PUBLIC_SUPABASE_URL!;
     const svc  = process.env.SUPABASE_SERVICE_ROLE_KEY!;
-    if (!base || !svc) {
-      return NextResponse.json({ error: 'Faltan variables de entorno de Supabase' }, { status: 500 });
-    }
+    if (!base || !svc) return NextResponse.json({ error: 'Faltan variables de entorno' }, { status: 500 });
     const headers = { apikey: svc, Authorization: `Bearer ${svc}`, 'Content-Type': 'application/json' as const };
 
     const payload = await req.json();
@@ -62,7 +44,7 @@ export async function POST(req: NextRequest) {
     if (!session_id) return NextResponse.json({ error: 'No hay caja abierta.' }, { status: 400 });
 
     // 2) RPC de venta
-    const rpcName = 'rpc_process_sale'; // ajusta si tu wrapper cambió
+    const rpcName = 'rpc_process_sale'; // ajusta si tu wrapper usa otro nombre
     const body = {
       p_company: company,
       p_branch: branch,
@@ -82,16 +64,12 @@ export async function POST(req: NextRequest) {
       sale.data?.new_sale_id || sale.data?.sale_id || sale.data?.id ||
       (typeof sale.data === 'string' ? sale.data : null);
 
-    // 3) ¿Auto-emisión activa?
-    const auto = await readAutoFlag(base, headers, company);
+    // 3) Auto-emisión DGI (forzado para demo)
     let invoice: any = null;
-
-    if (auto && sale_id) {
-      // llamamos al emisor local que acabas de crear (se encarga de actualizar sales+invoices)
+    if (FORCE_AUTO_EMIT && sale_id) {
       const origin = new URL(req.url).origin;
       const emRes = await fetch(`${origin}/api/facturas/emitir`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ company_id: company, sale_id })
       });
       const em = await toJson(emRes);
@@ -101,7 +79,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       ok: true,
       sale_id,
-      auto_emit_dgi: auto,
+      auto_emit_dgi: FORCE_AUTO_EMIT,
       invoice
     });
   } catch (e: any) {
