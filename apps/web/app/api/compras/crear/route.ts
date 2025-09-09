@@ -1,35 +1,19 @@
-export const dynamic = 'force-dynamic';
-export const revalidate = 0;
+import { NextResponse } from 'next/server';
+import { createClient } from '@/lib/supabaseServer';
 
-import { NextRequest, NextResponse } from 'next/server';
+export async function POST(req: Request) {
+  const sb = await createClient();
+  const body = await req.json();
 
-const COMPANY_ID = '11111111-1111-1111-1111-111111111111';
-const BRANCH_ID  = '22222222-2222-2222-2222-222222222222';
+  const { company_id, branch_id, supplier, items } = body;
 
-export async function POST(req: NextRequest) {
-  try {
-    const base = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-    const svc  = process.env.SUPABASE_SERVICE_ROLE_KEY!;
-    const headers = { apikey: svc, Authorization: `Bearer ${svc}`, 'Content-Type': 'application/json' as const };
+  const { data, error } = await sb.rpc('rpc_create_purchase', {
+    p_company: company_id,
+    p_branch: branch_id,
+    p_supplier: supplier,
+    p_items: items
+  });
 
-    const body = await req.json();
-    const supplier_id = body.supplier_id;
-    const items = body.items || [];
-
-    const r = await fetch(`${base}/rest/v1/rpc/rpc_process_purchase`, {
-      method: 'POST', headers,
-      body: JSON.stringify({
-        p_company: COMPANY_ID,
-        p_branch: BRANCH_ID,
-        p_supplier: supplier_id,
-        p_items: items
-      })
-    });
-    const t = await r.text(); let j:any={}; try{ j=JSON.parse(t);}catch{}
-    if (!r.ok) return new NextResponse(t, { status: r.status||400 });
-
-    return NextResponse.json({ ok:true, purchase_id: j });
-  } catch (e:any) {
-    return NextResponse.json({ error: e?.message || String(e) }, { status: 500 });
-  }
+  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+  return NextResponse.json({ purchase_id: data });
 }
