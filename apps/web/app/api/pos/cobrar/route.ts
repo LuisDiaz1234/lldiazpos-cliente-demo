@@ -19,29 +19,39 @@ function makeDemoFolio() {
   return `FOL-${y}-${rand}`;
 }
 
-/** Lee SOLO company_settings.auto_emit_dgi (default: false si no hay fila) */
-async function readAutoFlagStrict(base: string, admin: Record<string,string>, company: string) {
+/** Lee flag desde la vista v_company_flags; si no existe, cae a tablas. */
+async function readAutoFlag(base: string, admin: Record<string,string>, company: string) {
+  // 1) vista unificada
   try {
-    const r = await fetch(
-      `${base}/rest/v1/company_settings?select=auto_emit_dgi&company_id=eq.${company}`,
-      { headers: admin }
-    );
-    const j = await r.json();
-    if (Array.isArray(j) && j.length > 0) {
-      const v = j[0]?.auto_emit_dgi === true;
-      return { value: v, exist: true, row: j[0] };
+    const r = await fetch(`${base}/rest/v1/v_company_flags?select=auto_emit_dgi&company_id=eq.${company}`, { headers: admin });
+    if (r.ok) {
+      const j = await r.json();
+      if (Array.isArray(j) && j[0]) return { source: 'view', value: j[0].auto_emit_dgi === true };
     }
   } catch {}
-  return { value: false, exist: false, row: null };
+
+  // 2) fallback: company_settings
+  try {
+    const r = await fetch(`${base}/rest/v1/company_settings?select=auto_emit_dgi&company_id=eq.${company}`, { headers: admin });
+    const j = await r.json();
+    if (Array.isArray(j) && j[0]) return { source: 'company_settings', value: j[0].auto_emit_dgi === true };
+  } catch {}
+
+  // 3) fallback: companies
+  try {
+    const r = await fetch(`${base}/rest/v1/companies?select=auto_emit_dgi&id=eq.${company}`, { headers: admin });
+    const j = await r.json();
+    if (Array.isArray(j) && j[0]) return { source: 'companies', value: j[0].auto_emit_dgi === true };
+  } catch {}
+
+  return { source: 'default(false)', value: false };
 }
 
 export async function POST(req: NextRequest) {
   try {
     const base = process.env.NEXT_PUBLIC_SUPABASE_URL!;
     const svc  = process.env.SUPABASE_SERVICE_ROLE_KEY!;
-    if (!base || !svc) {
-      return NextResponse.json({ error: 'Faltan variables de entorno de Supabase' }, { status: 500 });
-    }
+    if (!base || !svc) return NextResponse.json({ error: 'Faltan env de Supabase' }, { status: 500 });
     const admin = { apikey: svc, Authorization: `Bearer ${svc}`, 'Content-Type': 'application/json' as const };
 
     // 1) payload
@@ -66,7 +76,7 @@ export async function POST(req: NextRequest) {
     const session_id = Array.isArray(ses) && ses[0]?.id ? ses[0].id : null;
     if (!session_id) return NextResponse.json({ error: 'No hay caja abierta.' }, { status: 400 });
 
-    // 3) procesar venta
+    // 3) procesar venta (RPC)
     const rpcBody = {
       p_company: company,
       p_branch: branch,
@@ -86,18 +96,17 @@ export async function POST(req: NextRequest) {
       sale.data?.new_sale_id || sale.data?.sale_id || sale.data?.id ||
       (typeof sale.data === 'string' ? sale.data : null);
 
-    // 4) leer toggle (SOLO company_settings)
-    const flag = await readAutoFlagStrict(base, admin, company);
+    // 4) lee flag (vista -> fallback)
+    const flag = await readAutoFlag(base, admin, company);
     const shouldEmit = !!sale_id && flag.value === true;
 
-    // 5) emitir si corresponde (inline)
+    // 5) emitir inline si corresponde
     let invoice: any = null;
     if (shouldEmit && sale_id) {
       try {
-        const folio  = makeDemoFolio(); // <-- reemplaza por folio real cuando conectes DGI
+        const folio  = makeDemoFolio();
         const qr_url = `https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(folio)}`;
 
-        // actualizar venta
         const upd = await fetch(`${base}/rest/v1/sales?id=eq.${sale_id}`, {
           method: 'PATCH', headers: admin,
           body: JSON.stringify({ dgi_status: 'emitida', dgi_folio: folio, dgi_qr: qr_url })
@@ -105,7 +114,6 @@ export async function POST(req: NextRequest) {
         const updTxt = await upd.text();
         if (!upd.ok) throw new Error(updTxt || 'No se pudo actualizar venta');
 
-        // upsert invoices
         const ins = await fetch(`${base}/rest/v1/invoices`, {
           method: 'POST', headers: admin,
           body: JSON.stringify([{ company_id: company, sale_id, folio, status: 'emitida', qr_url }])
@@ -123,15 +131,10 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 6) respuesta con detalle de decisión
     return NextResponse.json({
       ok: true,
       sale_id,
-      decision: {
-        source: 'company_settings.auto_emit_dgi',
-        exists: flag.exist,
-        value: flag.value
-      },
+      decision: { source: flag.source, value: flag.value },
       auto_emit_dgi: shouldEmit,
       invoice
     });
