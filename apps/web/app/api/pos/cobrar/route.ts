@@ -6,16 +6,6 @@ import { NextRequest, NextResponse } from 'next/server';
 const COMPANY_ID = '11111111-1111-1111-1111-111111111111';
 const BRANCH_ID  = '22222222-2222-2222-2222-222222222222';
 
-/**
- * DEMO override opcional por ENV:
- * - NEXT_PUBLIC_FORCE_AUTO_EMIT = "true"  -> siempre emite
- * - NEXT_PUBLIC_FORCE_AUTO_EMIT = "false" -> nunca emite
- * - no setear                                -> usa el flag en BD
- */
-const FORCE_AUTO_EMIT: boolean | null =
-  process.env.NEXT_PUBLIC_FORCE_AUTO_EMIT === 'true'  ? true  :
-  process.env.NEXT_PUBLIC_FORCE_AUTO_EMIT === 'false' ? false : null;
-
 type J = { ok:boolean; status:number; data:any; raw:string };
 async function toJson(res: Response): Promise<J> {
   const raw = await res.text();
@@ -29,34 +19,20 @@ function makeDemoFolio() {
   return `FOL-${y}-${rand}`;
 }
 
-/** Lee el flag desde posibles tablas de configuración */
-async function readAutoFlag(base: string, admin: Record<string,string>, company: string): Promise<boolean> {
-  // 1) company_settings(company_id, auto_emit_dgi)
+/** Lee SOLO company_settings.auto_emit_dgi (default: false si no hay fila) */
+async function readAutoFlagStrict(base: string, admin: Record<string,string>, company: string) {
   try {
-    const r = await fetch(`${base}/rest/v1/company_settings?select=auto_emit_dgi&company_id=eq.${company}`, { headers: admin });
+    const r = await fetch(
+      `${base}/rest/v1/company_settings?select=auto_emit_dgi&company_id=eq.${company}`,
+      { headers: admin }
+    );
     const j = await r.json();
-    if (Array.isArray(j) && j[0]?.auto_emit_dgi === true) return true;
-    if (Array.isArray(j) && j[0]?.auto_emit_dgi === false) return false;
+    if (Array.isArray(j) && j.length > 0) {
+      const v = j[0]?.auto_emit_dgi === true;
+      return { value: v, exist: true, row: j[0] };
+    }
   } catch {}
-
-  // 2) companies(id, auto_emit_dgi)
-  try {
-    const r = await fetch(`${base}/rest/v1/companies?select=auto_emit_dgi&id=eq.${company}`, { headers: admin });
-    const j = await r.json();
-    if (Array.isArray(j) && j[0]?.auto_emit_dgi === true) return true;
-    if (Array.isArray(j) && j[0]?.auto_emit_dgi === false) return false;
-  } catch {}
-
-  // 3) company_config(company_id, auto_emit_dgi)
-  try {
-    const r = await fetch(`${base}/rest/v1/company_config?select=auto_emit_dgi&company_id=eq.${company}`, { headers: admin });
-    const j = await r.json();
-    if (Array.isArray(j) && j[0]?.auto_emit_dgi === true) return true;
-    if (Array.isArray(j) && j[0]?.auto_emit_dgi === false) return false;
-  } catch {}
-
-  // por defecto: no auto-emite
-  return false;
+  return { value: false, exist: false, row: null };
 }
 
 export async function POST(req: NextRequest) {
@@ -68,7 +44,7 @@ export async function POST(req: NextRequest) {
     }
     const admin = { apikey: svc, Authorization: `Bearer ${svc}`, 'Content-Type': 'application/json' as const };
 
-    // ---------- 1) payload ----------
+    // 1) payload
     const payload = await req.json();
     const company = payload.company_id || COMPANY_ID;
     const branch  = payload.branch_id  || BRANCH_ID;
@@ -80,7 +56,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Items y pagos son requeridos' }, { status: 400 });
     }
 
-    // ---------- 2) caja abierta ----------
+    // 2) caja abierta
     const qs = new URLSearchParams({
       select: 'id', order: 'apertura.desc', limit: '1',
       'company_id': `eq.${company}`, 'branch_id': `eq.${branch}`, 'cierre': 'is.null'
@@ -90,7 +66,7 @@ export async function POST(req: NextRequest) {
     const session_id = Array.isArray(ses) && ses[0]?.id ? ses[0].id : null;
     if (!session_id) return NextResponse.json({ error: 'No hay caja abierta.' }, { status: 400 });
 
-    // ---------- 3) RPC procesar venta ----------
+    // 3) procesar venta
     const rpcBody = {
       p_company: company,
       p_branch: branch,
@@ -110,18 +86,18 @@ export async function POST(req: NextRequest) {
       sale.data?.new_sale_id || sale.data?.sale_id || sale.data?.id ||
       (typeof sale.data === 'string' ? sale.data : null);
 
-    // ---------- 4) decidir si auto-emite ----------
-    const flagFromDB = await readAutoFlag(base, admin, company);
-    const shouldEmit = (FORCE_AUTO_EMIT ?? flagFromDB) && !!sale_id;
+    // 4) leer toggle (SOLO company_settings)
+    const flag = await readAutoFlagStrict(base, admin, company);
+    const shouldEmit = !!sale_id && flag.value === true;
 
-    // ---------- 5) emitir (inline) si corresponde ----------
+    // 5) emitir si corresponde (inline)
     let invoice: any = null;
     if (shouldEmit && sale_id) {
       try {
-        const folio  = makeDemoFolio(); // <--- reemplaza aquí por folio real al integrar DGI
+        const folio  = makeDemoFolio(); // <-- reemplaza por folio real cuando conectes DGI
         const qr_url = `https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(folio)}`;
 
-        // a) marca venta emitida
+        // actualizar venta
         const upd = await fetch(`${base}/rest/v1/sales?id=eq.${sale_id}`, {
           method: 'PATCH', headers: admin,
           body: JSON.stringify({ dgi_status: 'emitida', dgi_folio: folio, dgi_qr: qr_url })
@@ -129,7 +105,7 @@ export async function POST(req: NextRequest) {
         const updTxt = await upd.text();
         if (!upd.ok) throw new Error(updTxt || 'No se pudo actualizar venta');
 
-        // b) upsert en invoices (si tu UI lista desde ahí)
+        // upsert invoices
         const ins = await fetch(`${base}/rest/v1/invoices`, {
           method: 'POST', headers: admin,
           body: JSON.stringify([{ company_id: company, sale_id, folio, status: 'emitida', qr_url }])
@@ -147,12 +123,16 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ---------- 6) respuesta ----------
+    // 6) respuesta con detalle de decisión
     return NextResponse.json({
       ok: true,
       sale_id,
-      auto_emit_dgi: shouldEmit,   // <- ahora refleja el toggle real
-      source: FORCE_AUTO_EMIT === null ? 'db' : 'env',  // para debug
+      decision: {
+        source: 'company_settings.auto_emit_dgi',
+        exists: flag.exist,
+        value: flag.value
+      },
+      auto_emit_dgi: shouldEmit,
       invoice
     });
   } catch (e: any) {
