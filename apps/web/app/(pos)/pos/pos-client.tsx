@@ -1,150 +1,175 @@
 'use client';
-
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { createClient } from '@/lib/supabaseClient';
-import AddProductButton from '@/components/AddProductButton';
+
+type Producto = { id: string; nombre: string; precio: number; activo: boolean; es_insumo: boolean };
+
+type CarritoItem = {
+  product_id: string;
+  nombre: string;
+  cantidad: number;
+  precio_unit: number;
+  itbms_rate: number;
+  descuento: number;
+};
+
+type PagoItem = {
+  metodo: 'efectivo' | 'tarjeta' | 'ach';
+  monto: number;
+  recibido_en?: string; // ISO
+};
 
 const COMPANY_ID = '11111111-1111-1111-1111-111111111111';
+const BRANCH_ID  = '22222222-2222-2222-2222-222222222222';
 
-type Producto = { id:string; nombre:string; precio:number; activo:boolean; es_insumo:boolean; itbms_rate?:number|null; };
-type CartItem = { product_id:string; nombre:string; precio_unit:number; itbms_rate:number; cantidad:number; descuento:number; };
-
-function POSClient() {
+export default function POSClient() {
   const supabase = createClient();
   const [productos, setProductos] = useState<Producto[]>([]);
+  const [carrito, setCarrito] = useState<CarritoItem[]>([]);
+  const [pagos, setPagos] = useState<PagoItem[]>([{ metodo:'efectivo', monto:0 }]);
+  const [descJubilado, setDescJubilado] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [tick, setTick] = useState(0);
 
-  async function cargarProductos() {
+  useEffect(()=>{ (async ()=>{
     setLoading(true);
-    const { data } = await supabase
-      .from('products')
-      .select('id,nombre,precio,activo,es_insumo,itbms_rate')
-      .eq('company_id', COMPANY_ID).eq('activo', true).eq('es_insumo', false)
-      .order('nombre');
+    const { data } = await supabase.from('products').select('id,nombre,precio,activo,es_insumo').eq('activo', true).eq('es_insumo', false);
     setProductos(data || []);
     setLoading(false);
-  }
-  useEffect(()=>{ cargarProductos(); }, [tick]);
-  const reload = ()=> setTick(x=>x+1);
+  })(); }, []);
 
-  // carrito
-  const [items, setItems] = useState<CartItem[]>([]);
-  const [descJub, setDescJub] = useState(false);
-  function add(p:Producto){
-    setItems(arr=>{
-      const i = arr.findIndex(x=>x.product_id===p.id);
-      if (i>=0){ const c=[...arr]; c[i]={...c[i], cantidad:c[i].cantidad+1}; return c; }
-      return [...arr, { product_id:p.id, nombre:p.nombre, precio_unit:Number(p.precio||0), itbms_rate:Number(p.itbms_rate||0), cantidad:1, descuento:0 }];
+  function addToCart(p: Producto) {
+    setCarrito(prev=>{
+      const i = prev.findIndex(x=>x.product_id===p.id);
+      if (i>=0) {
+        const c=[...prev]; c[i].cantidad += 1; return c;
+      }
+      return [...prev, { product_id:p.id, nombre:p.nombre, cantidad:1, precio_unit:Number(p.precio), itbms_rate:0.07, descuento:0 }];
     });
   }
-  function setQty(id:string,q:number){ setItems(arr=>arr.map(x=>x.product_id===id?{...x,cantidad:q}:x).filter(x=>x.cantidad>0)); }
-  function clear(){ setItems([]); }
-  const tot = useMemo(()=>{
-    const sub = items.reduce((a,b)=>a+b.cantidad*b.precio_unit,0);
-    const itb = items.reduce((a,b)=>a+Math.round((b.cantidad*b.precio_unit-(b.descuento||0))*(b.itbms_rate||0)*100)/100,0);
-    let desc = items.reduce((a,b)=>a+(b.descuento||0),0);
-    if (descJub) desc += Math.round(sub*0.15*100)/100;
-    const total = Math.max(0, sub+itb-desc);
-    return { sub, itb, desc, total };
-  },[items,descJub]);
 
-  async function cobrar(){
-    if(items.length===0) return;
+  const subtotal = carrito.reduce((a,c)=>a + c.cantidad * c.precio_unit, 0);
+  const itbms    = carrito.reduce((a,c)=>a + (c.cantidad*c.precio_unit - c.descuento) * c.itbms_rate, 0);
+  const total    = +(subtotal + itbms - (descJubilado ? subtotal*0.15 : 0)).toFixed(2);
+  const pagado   = pagos.reduce((a,p)=>a + Number(p.monto||0), 0);
+  const pendiente= +(total - pagado).toFixed(2);
+
+  function setPago(idx:number, patch: Partial<PagoItem>) {
+    setPagos(prev=>{
+      const a=[...prev]; a[idx] = { ...a[idx], ...patch }; return a;
+    });
+  }
+  function addPago() { setPagos(p=>[...p, { metodo:'efectivo', monto:0 }]); }
+  function removePago(i:number){ setPagos(p=>p.filter((_,idx)=>idx!==i)); }
+
+  async function cobrar() {
+    if (!carrito.length) { alert('Carrito vacío'); return; }
+    if (pendiente>0) { alert('Faltan pagos por $'+pendiente.toFixed(2)); return; }
 
     const payload = {
-      branch_id:'22222222-2222-2222-2222-222222222222',
       company_id: COMPANY_ID,
+      branch_id: BRANCH_ID,
       customer_id: null,
-      desc_jubilado: descJub ? 0.15 : 0,
-      items: items.map(x=>({
-        product_id:x.product_id, cantidad:x.cantidad, precio_unit:x.precio_unit,
-        itbms_rate:x.itbms_rate||0, descuento:x.descuento||0
+      desc_jubilado: descJubilado ? 0.15 : 0,
+      items: carrito.map(c=>({
+        product_id: c.product_id,
+        cantidad: c.cantidad,
+        precio_unit: c.precio_unit,
+        itbms_rate: c.itbms_rate,
+        descuento: c.descuento
       })),
-      pagos: [{ metodo:'efectivo', monto: tot.total }]
+      pagos: pagos.map(p=>({
+        metodo: p.metodo,
+        monto: Number(p.monto),
+        recibido_en: p.recibido_en || new Date().toISOString()
+      }))
     };
 
-    try {
-      const r = await fetch('/api/pos/cobrar', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify(payload)
-      });
-      const txt = await r.text();
-      if(!r.ok){
-        alert('Error al cobrar:\n' + (txt || '(sin detalle)'));
-        return;
-      }
-      let data:any = {};
-      try { data = JSON.parse(txt); } catch {}
-      clear();
-      if (data?.auto_emit_dgi) {
-        if (data?.invoice?.ok) {
-          alert('Venta OK y DGI emitida.');
-        } else {
-          alert('Venta OK. (Aviso) No se pudo emitir DGI automáticamente.\n' + (data?.invoice?.error || ''));
-        }
-      } else {
-        alert('Venta OK.');
-      }
-    } catch (e:any) {
-      alert('Error al cobrar: ' + (e?.message || String(e)));
-    }
+    const r = await fetch('/api/pos/cobrar', { method:'POST', body: JSON.stringify(payload) });
+    const t = await r.text(); let j:any={}; try{ j=JSON.parse(t);}catch{ }
+    if (!r.ok) { alert('Error al cobrar:\n'+t); return; }
+
+    // Limpia
+    setCarrito([]); setPagos([{ metodo:'efectivo', monto:0 }]);
+    alert(
+      'Venta OK.' +
+      (j.auto_emit_dgi ? ' DGI emitida.' : '') +
+      (j.decision ? `\n[Auto-emit: ${j.decision.value ? 'ON':'OFF'}]` : '')
+    );
   }
 
   return (
-    <div className="flex gap-6">
-      <div className="flex-1">
-        <div className="mb-3 flex items-center justify-between">
-          <h1 className="text-xl font-semibold">POS</h1>
-          <AddProductButton esInsumo={false} onCreated={reload} />
+    <div className="grid md:grid-cols-[1fr_340px] gap-6">
+      <div>
+        <div className="grid sm:grid-cols-3 gap-3">
+          {loading ? <div>Cargando…</div> :
+            productos.map(p=>(
+              <button key={p.id} onClick={()=>addToCart(p)} className="rounded-2xl border bg-white p-4 text-left">
+                <div className="font-medium">{p.nombre}</div>
+                <div className="text-gray-600">${Number(p.precio).toFixed(2)}</div>
+              </button>
+            ))
+          }
         </div>
-
-        {loading && <div className="text-gray-500">Cargando…</div>}
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-          {productos.map(p=>(
-            <button key={p.id} className="rounded-2xl border bg-white p-3 text-left hover:shadow" onClick={()=>add(p)}>
-              <div className="h-20 rounded-xl bg-gray-100 mb-2" />
-              <div className="font-medium truncate">{p.nombre}</div>
-              <div className="text-xs text-gray-500">${Number(p.precio||0).toFixed(2)}</div>
-            </button>
-          ))}
-        </div>
-        {!loading && productos.length===0 && <div className="text-gray-500 mt-6">No hay productos vendibles aún.</div>}
       </div>
 
-      <div className="w-full sm:w-96">
-        <div className="rounded-2xl border bg-white p-4 space-y-3">
-          <div className="font-semibold">Carrito</div>
-          {items.length===0 ? <div className="text-sm text-gray-500">Carrito vacío</div> : (
-            <div className="space-y-2">
-              {items.map(it=>(
-                <div key={it.product_id} className="flex items-center justify-between gap-2">
-                  <div className="truncate">{it.nombre}</div>
-                  <div className="flex items-center gap-2">
-                    <input type="number" min={0} className="border rounded-xl px-2 py-1 w-20 text-right"
-                      value={it.cantidad} onChange={e=>setQty(it.product_id, Number(e.target.value||0))}/>
-                    <div className="w-16 text-right text-sm">${(it.cantidad*it.precio_unit).toFixed(2)}</div>
-                  </div>
-                </div>
-              ))}
+      <div className="rounded-2xl border bg-white p-4 space-y-3">
+        <div className="font-semibold">Carrito</div>
+        {!carrito.length && <div className="text-sm text-gray-500">Carrito vacío</div>}
+
+        {carrito.map((c,idx)=>(
+          <div key={idx} className="flex items-center justify-between gap-2 text-sm">
+            <div className="w-1/2">{c.nombre}</div>
+            <div className="flex items-center gap-2">
+              <button onClick={()=>setCarrito(prev=>{ const a=[...prev]; a[idx].cantidad=Math.max(1,a[idx].cantidad-1); return a; })} className="px-2 border rounded">-</button>
+              <span>{c.cantidad}</span>
+              <button onClick={()=>setCarrito(prev=>{ const a=[...prev]; a[idx].cantidad+=1; return a; })} className="px-2 border rounded">+</button>
             </div>
-          )}
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={descJub} onChange={e=>setDescJub(e.target.checked)} />
-            Aplicar descuento Jubilado (15%)
-          </label>
-          <div className="text-sm">
-            <div className="flex justify-between"><span>Subtotal</span><span>${tot.sub.toFixed(2)}</span></div>
-            <div className="flex justify-between"><span>ITBMS</span><span>${tot.itb.toFixed(2)}</span></div>
-            <div className="flex justify-between"><span>Descuento</span><span>${tot.desc.toFixed(2)}</span></div>
-            <hr className="my-2"/><div className="flex justify-between font-semibold"><span>Total</span><span>${tot.total.toFixed(2)}</span></div>
+            <div>${(c.cantidad*c.precio_unit).toFixed(2)}</div>
           </div>
-          <button onClick={cobrar} disabled={items.length===0} className="w-full px-4 py-2 rounded-xl bg-amber-300 hover:bg-amber-200 border">Cobrar</button>
+        ))}
+
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={descJubilado} onChange={e=>setDescJubilado(e.target.checked)}/>
+          Aplicar descuento Jubilado (15%)
+        </label>
+
+        <div className="border-t pt-2 text-sm">
+          <div className="flex justify-between"><span>Subtotal</span><span>${subtotal.toFixed(2)}</span></div>
+          <div className="flex justify-between"><span>ITBMS</span><span>${itbms.toFixed(2)}</span></div>
+          <div className="flex justify-between font-semibold text-lg"><span>Total</span><span>${total.toFixed(2)}</span></div>
         </div>
+
+        <div className="pt-2">
+          <div className="font-medium mb-1">Pagos</div>
+          {pagos.map((p,idx)=>(
+            <div key={idx} className="flex items-center gap-2 mb-2">
+              <select value={p.metodo} onChange={e=>setPago(idx,{metodo:e.target.value as any})} className="border rounded px-2 py-1">
+                <option value="efectivo">Efectivo</option>
+                <option value="tarjeta">Tarjeta</option>
+                <option value="ach">ACH</option>
+              </select>
+              <input type="number" step="0.01" value={p.monto} onChange={e=>setPago(idx,{monto:Number(e.target.value)})}
+                     placeholder="Monto" className="border rounded px-2 py-1 w-28"/>
+              <input type="datetime-local" value={p.recibido_en?.slice(0,16)}
+                     onChange={e=>setPago(idx,{recibido_en: e.target.value ? new Date(e.target.value).toISOString() : undefined})}
+                     className="border rounded px-2 py-1"/>
+              {pagos.length>1 && <button onClick={()=>removePago(idx)} className="px-2 border rounded">x</button>}
+            </div>
+          ))}
+          <button onClick={addPago} className="text-sm underline">+ Agregar método de pago</button>
+
+          <div className="flex justify-between mt-2 text-sm">
+            <span>Pagado</span><span>${pagado.toFixed(2)}</span>
+          </div>
+          <div className="flex justify-between text-sm">
+            <span>Pendiente</span><span>${pendiente.toFixed(2)}</span>
+          </div>
+        </div>
+
+        <button onClick={cobrar} className="w-full py-3 rounded-2xl bg-amber-300 hover:bg-amber-200 font-medium">
+          Cobrar
+        </button>
       </div>
     </div>
   );
 }
-
-export default POSClient;
